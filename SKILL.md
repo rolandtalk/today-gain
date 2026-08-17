@@ -17,6 +17,7 @@ Convert a holdings screenshot into a clean Google Sheet:
    - `本日報酬率 = (截圖市價 - 昨日收盤價) / 昨日收盤價`
    - `20日盈虧 = (截圖市價 - 20D基準價) * 股數`
    - `20日報酬率 = (截圖市價 - 20D基準價) / 20D基準價`
+   - Add a bottom summary row labeled `合計` that sums the full `本日盈虧` column and the full `20日盈虧` column.
 5. Create or update a Google Sheet named `本日個股盈虧計算` unless the user requests another name. If the user asks for a date-specific title such as `台股+today's date`, use the exact current date in `YYYY-MM-DD`.
 6. Use these columns, in this order, and do not add a `資料來源` column:
    `股票`, `代號`, `GoogleFinance代號`, `股數`, `截圖市價`, `成本價`, `成本`, `目前市值`, `庫存損益`, `庫存報酬率`, `昨日收盤價`, `本日盈虧`, `本日報酬率`, `20日盈虧`, `20日報酬率`.
@@ -25,10 +26,12 @@ Convert a holdings screenshot into a clean Google Sheet:
 
 - Show `本日盈虧` as a signed whole number with no decimals.
 - Show `本日報酬率`, `20日盈虧`, and `20日報酬率` as signed values; percentages use 1 decimal place and gains use whole numbers.
+- Show summary-row totals for `本日盈虧` and `20日盈虧` as signed whole numbers with no decimals.
 - Keep losses as negative numbers.
 - Use percent formatting for `庫存報酬率`, `本日報酬率`, and `20日報酬率`.
 - Freeze the header row and columns A:B, make the header bold, add filters over the populated data range, and apply alternating row highlighting to the data rows for readability.
-- If the screenshot has multiple pages or sections, combine all holdings into one table and add a summary row.
+- Keep the `合計` row visually distinct and below the holdings table. If possible, keep filters on the holdings rows and leave the summary row outside the sortable/filterable data range.
+- If the screenshot has multiple pages or sections, combine all holdings into one table before adding the summary row.
 
 ## Google Sheets Delivery
 
@@ -62,11 +65,13 @@ python3 scripts/build_today_gain_xlsx.py holdings.csv 本日個股盈虧計算.x
 ```
 
 The script computes `本日盈虧`, `本日報酬率`, `20日盈虧`, and `20日報酬率`, formats an `.xlsx` workbook, and leaves missing daily/20D values blank when source prices are unavailable. If this fallback is used, import or upload the workbook into Google Sheets before delivery whenever possible.
+It also appends a `合計` row that totals `本日盈虧` and `20日盈虧`.
 
 ## Quality Checks
 
 - Confirm every visible holding from the screenshot appears exactly once.
 - Recalculate at least two rows by hand before delivering.
 - Verify filters cover every sortable column, including `庫存損益`, `%`, `本日盈虧`, `本日報酬率`, `20日盈虧`, and `20日報酬率`.
+- Verify the `合計` row totals all visible holding rows for `本日盈虧` and `20日盈虧`.
 - Check that no spreadsheet cells contain formula errors.
 - Mention the market-data timestamp/date used, especially if the user asked for "today".

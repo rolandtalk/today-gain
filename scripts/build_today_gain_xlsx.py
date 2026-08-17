@@ -80,6 +80,8 @@ def sheet_xml(rows: list[list], styles: list[list[int | None]]) -> str:
         cells = [cell_xml(r_idx, c_idx, value, style_id(styles[r_idx - 1][c_idx - 1], r_idx)) for c_idx, value in enumerate(row, start=1)]
         row_xml.append(f'<row r="{r_idx}">{"".join(cells)}</row>')
     dimension = f"A1:O{len(rows)}"
+    filter_end_row = len(rows) - 1 if len(rows) > 2 and rows[-1][0] == "合計" else len(rows)
+    filter_ref = f"A1:O{filter_end_row}"
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <dimension ref="{dimension}"/>
@@ -91,7 +93,7 @@ def sheet_xml(rows: list[list], styles: list[list[int | None]]) -> str:
     <col min="4" max="15" width="14" customWidth="1"/>
   </cols>
   <sheetData>{"".join(row_xml)}</sheetData>
-  <autoFilter ref="{dimension}"/>
+  <autoFilter ref="{filter_ref}"/>
 </worksheet>'''
 
 
@@ -136,6 +138,13 @@ def stock_symbol(record: dict[str, str]) -> str:
     return f"{code}.tw" if code else ""
 
 
+def sum_present(values: list[float | int | None]) -> int | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return round(sum(present))
+
+
 def build_rows(input_csv: Path) -> tuple[list[list], list[list[int | None]]]:
     rows = [HEADERS]
     styles = [[1] * len(HEADERS)]
@@ -175,6 +184,10 @@ def build_rows(input_csv: Path) -> tuple[list[list], list[list[int | None]]]:
             ]
             rows.append(row)
             styles.append([None, None, None, 2, 3, 3, 3, 3, 5, 4, 3, 5, 4, 5, 4])
+    daily_total = sum_present([row[11] for row in rows[1:]])
+    gain_20d_total = sum_present([row[13] for row in rows[1:]])
+    rows.append(["合計", "", "", "", "", "", "", "", "", "", "", daily_total, "", gain_20d_total, ""])
+    styles.append([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5, 1, 5, 1])
     return rows, styles
 
 
