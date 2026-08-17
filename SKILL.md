@@ -110,18 +110,20 @@ Add totals for the full `本日盈虧` and `20日盈虧` populations. Keep losse
 
 ## Google Sheet mode
 
-Create a Google Sheet named `本日個股盈虧計算` with tab `本日個股盈虧`, unless the user supplies another name. Use these columns in order:
+Create or update a Google Sheet named `台股YYMMDD`, using the Asia/Taipei date from the run date. For example, August 17, 2026 is `台股260817`. Use tab `本日個股盈虧`, unless the user supplies another name. Use these columns in order:
 
 `股票,代號,GoogleFinance代號,股數,截圖市價,成本價,成本,目前市值,庫存損益,庫存報酬率,昨日收盤價,本日盈虧,本日報酬率,20日盈虧,20日報酬率`
 
 Create and author the spreadsheet directly with connected Google Drive/Sheets tools:
 
-1. Call the native Drive file-creation action with MIME type `application/vnd.google-apps.spreadsheet`.
-2. Read the new spreadsheet metadata and use the returned spreadsheet ID, exact tab title, and `sheetId`.
-3. Rename the tab to `本日個股盈虧` when needed.
-4. Write the complete bounded values/formulas block with Sheets `batchUpdate` requests.
-5. Apply number formats, header style, frozen row/columns, column widths, alternating-row formatting, and a basic filter over holding rows only.
-6. Read the populated range and metadata back for verification.
+1. Search Drive for an existing Google Sheet with the exact same `台股YYMMDD` title.
+2. If a same-day file exists, update that spreadsheet in place: clear or overwrite the existing `本日個股盈虧` tab content and formatting for the populated report area, then write the new report. Do not create a duplicate same-day file.
+3. If no same-day file exists, call the native Drive file-creation action with MIME type `application/vnd.google-apps.spreadsheet`.
+4. Read the target spreadsheet metadata and use the returned spreadsheet ID, exact tab title, and `sheetId`.
+5. Rename the tab to `本日個股盈虧` when needed.
+6. Write the complete bounded values/formulas block with Sheets `batchUpdate` requests.
+7. Apply number formats, header style, frozen row/columns, column widths, alternating-row formatting, and a basic filter over holding rows only.
+8. Read the populated range and metadata back for verification.
 
 Never create, transform, upload, import, export, or verify an Excel/XLSX file for Google Sheet mode. If direct native Google Sheet creation or writing is unavailable, stop and report the connector limitation instead of falling back to Excel.
 
