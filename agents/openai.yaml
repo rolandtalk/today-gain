@@ -1,4 +1,7 @@
 interface:
   display_name: "Today Gain"
-  short_description: "Daily and 20D stock P/L in Google Sheets"
-  default_prompt: "Use $today-gain to turn my holdings screenshot into a sortable daily and 20D stock profit/loss Google Sheet."
+  short_description: "Track Taiwan stock gains in Sheets or SQLite"
+  default_prompt: "Use $today-gain to extract my holdings and update either the gain sheet or SQLite price database."
+
+policy:
+  allow_implicit_invocation: true
