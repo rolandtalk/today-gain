@@ -125,8 +125,14 @@ Create and author the spreadsheet directly with connected Google Drive/Sheets to
 7. Apply number formats, header style, frozen row/columns, column widths, alternating-row formatting, and a basic filter over holding rows only.
 8. Read the populated range and metadata back for verification.
 
+Highlight the five largest numeric holding cells separately in each of these columns with an orange background:
+
+`目前市值,庫存損益,庫存報酬率,本日盈虧,本日報酬率,20日盈虧,20日報酬率`
+
+Exclude the header and `合計` row. Add one conditional-format rule per column, with the orange rule ahead of the alternating-row rule so the highlight remains visible. To select exactly five cells even when values tie, rank descending and break ties by row order; for example, for `H2:H21`, use `=RANK(H2,$H$2:$H$21)+COUNTIF($H$2:H2,H2)-1<=5`. Adjust the ending row to the actual last holding row and apply the equivalent formula to each target column. Use a light orange fill such as RGB `(1.0, 0.85, 0.65)`.
+
 Never create, transform, upload, import, export, or verify an Excel/XLSX file for Google Sheet mode. If direct native Google Sheet creation or writing is unavailable, stop and report the connector limitation instead of falling back to Excel.
 
 Keep the market symbol visible. Use formulas when the user may edit prices; otherwise sourced static values are acceptable. Freeze row 1 and columns A:B, make headers bold, filter all holding rows, apply subtle alternating rows, and leave a visually distinct `合計` row outside the filter.
 
-Before delivery, confirm every screenshot holding appears once, recalculate two rows, verify totals, check for formula errors, and state the market-data date.
+Before delivery, confirm every screenshot holding appears once, recalculate two rows, verify totals, check for formula errors, confirm exactly five orange holding cells in each target column, and state the market-data date.
