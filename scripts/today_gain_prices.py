@@ -20,6 +20,7 @@ TAIPEI = ZoneInfo("Asia/Taipei")
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 TWSE_MIS_URL = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
 INTRADAY_SLOTS = {"09:06", "10:06", "11:06", "12:06", "13:06"}
+TAIWAN_SYMBOL_SUFFIXES = (".tw", ".two")
 
 
 def now_taipei() -> datetime:
@@ -173,6 +174,11 @@ def sync_holdings(db: sqlite3.Connection, csv_path: Path, as_of: str) -> tuple[i
         for row in csv.DictReader(handle):
             ticker = row["代號"].strip()
             symbol = row["GoogleFinance代號"].strip().lower()
+            if not symbol.endswith(TAIWAN_SYMBOL_SUFFIXES):
+                raise ValueError(
+                    f"{ticker}: SQLite fast mode currently supports Taiwan symbols only "
+                    f"(.tw/.two), got {row['GoogleFinance代號'].strip()!r}"
+                )
             exchange = "otc" if symbol.endswith(".two") else "tse"
             seen.add(ticker)
             db.execute(

@@ -25,6 +25,8 @@ Store the extracted rows in UTF-8 CSV when using SQLite mode. New screenshots ar
 
 Use [`scripts/today_gain_prices.py`](scripts/today_gain_prices.py). Default the database to `outputs/today-gain/today_gain.sqlite3` inside the active project unless the user supplies another path.
 
+SQLite fast mode currently supports Taiwan-listed holdings only. Before writing the database, confirm every `GoogleFinance代號` ends with `.tw` or `.two`. If US, OTCMKTS, NYSE, NASDAQ, BATS, NYSEARCA, or another non-Taiwan symbol appears, do not run the SQLite collector; report that US SQLite support needs a separate price-source implementation instead of storing misleading TWSE/FinMind rows.
+
 Initialize or migrate the database and backfill new stocks:
 
 ```bash
