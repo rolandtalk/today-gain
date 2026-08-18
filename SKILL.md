@@ -112,13 +112,13 @@ Add totals for the full `本日盈虧` and `20日盈虧` populations. Keep losse
 
 ## Google Sheet mode
 
-Create or update a Google Sheet named `台股YYMMDD`, using the Asia/Taipei date from the run date. For example, August 17, 2026 is `台股260817`. Use tab `本日個股盈虧`, unless the user supplies another name. Use these columns in order:
+Create or update a Google Sheet named with the market prefix plus `YYMMDD`, using the Asia/Taipei date from the run date. Use `美股YYMMDD` when the target symbols are US-listed equities, including `NYSE:*`, `NASDAQ:*`, `BATS:*`, `NYSEARCA:*`, or `OTCMKTS:*`. Use `台股YYMMDD` for Taiwan-listed holdings. For example, August 17, 2026 becomes `美股260817` for US holdings and `台股260817` for Taiwan holdings. Use tab `本日個股盈虧`, unless the user supplies another name. Use these columns in order:
 
 `股票,代號,GoogleFinance代號,股數,截圖市價,成本價,成本,目前市值,庫存損益,庫存報酬率,昨日收盤價,本日盈虧,本日報酬率,20日盈虧,20日報酬率`
 
 Create and author the spreadsheet directly with connected Google Drive/Sheets tools:
 
-1. Search Drive for an existing Google Sheet with the exact same `台股YYMMDD` title.
+1. Search Drive for an existing Google Sheet with the exact same market-prefixed `YYMMDD` title.
 2. If a same-day file exists, update that spreadsheet in place: clear or overwrite the existing `本日個股盈虧` tab content and formatting for the populated report area, then write the new report. Do not create a duplicate same-day file.
 3. If no same-day file exists, call the native Drive file-creation action with MIME type `application/vnd.google-apps.spreadsheet`.
 4. Read the target spreadsheet metadata and use the returned spreadsheet ID, exact tab title, and `sheetId`.
