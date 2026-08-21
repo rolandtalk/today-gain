@@ -7,6 +7,7 @@ description: Extract Taiwan brokerage holdings from screenshots, persist closing
 
 ## Choose the workflow
 
+- Use the Turbo workflow below by default for repeated Taiwan reports. It combines calculation, database checks, cached report lookup, Sheets-batch preparation, and verification into one local command.
 - For Taiwan holdings, always use the persistent SQLite database for yesterday and 20D closing prices, then publish the resulting values to Google Sheets. This is the default screenshot-to-report workflow; the user does not need to say “fast mode.”
 - For US or other non-Taiwan holdings, use Google Sheet mode without SQLite and report that the Taiwan collector does not support those markets.
 - Preserve an existing database and update it in place. Never recreate it merely because a new screenshot arrives.
@@ -22,6 +23,30 @@ For Taiwan stocks, keep the broker ticker in `代號`. Use `<ticker>.tw` for lis
 Store the extracted rows in UTF-8 CSV. New screenshots are authoritative for the active stock universe: add newly seen stocks, update existing stocks, and mark absent stocks inactive without deleting their historical closes.
 
 Reuse a stored market symbol when a later CSV leaves `GoogleFinance代號` blank. When a valid `.tw`/`.two` value changes for an existing ticker, update `stock_universe` and record the old and new mappings in `ticker_transitions`. Visually verify the change before calculation; never guess an exchange transition.
+
+### Turbo workflow
+
+Use [`scripts/today_gain_turbo.py`](scripts/today_gain_turbo.py) after producing the verified holdings CSV:
+
+```bash
+python3 <skill-dir>/scripts/today_gain_turbo.py \
+  --holdings <holdings.csv> --image <screenshot.jpg> \
+  --date <screenshot-date> --output-dir <run-dir> \
+  --ocr-python <vision-venv>/bin/python
+```
+
+The runner calculates the report, checks SQLite integrity/readiness, looks up the same-day Sheet target cached in `report_targets`, prepares one `sheets-batch.json`, and writes a compact `manifest.json` containing totals, dates, duplicates, and expected top-five rows. The optional OCR pass uses [`scripts/today_gain_ocr.py`](scripts/today_gain_ocr.py) with local macOS Vision. Install `pyobjc-framework-Vision` and `pyobjc-framework-Quartz` in its Python environment once. OCR is an audit aid: if extraction is incomplete or uncertain, verify/correct the holdings CSV before any Sheet write.
+
+If the manifest says `ready`, call the Sheets batch-update action once with its cached `spreadsheet_id` and the requests in `sheets-batch.json`, then perform one bounded readback. If it says `needs_sheet_target`, do the normal Drive search/copy and metadata read once, cache the resolved target, then rerun Turbo:
+
+```bash
+python3 <skill-dir>/scripts/today_gain_prices.py cache-report \
+  --date <date> --market tw --title <台股YYMMDD> \
+  --spreadsheet-id <id> --sheet-id <numeric-id> \
+  --topology <template-50-or-legacy>
+```
+
+Do not repeat Drive search or metadata discovery after a cache hit unless the cached write fails because the file was deleted, renamed, or structurally changed. For a same-day rerun, reuse the cached target and overwrite only the bounded report values.
 
 ## SQLite-backed calculation
 
@@ -60,6 +85,7 @@ Omit `--db` to use the stable default. `calculate` synchronizes holdings, fills 
 - `intraday_prices`: at most five snapshots per active ticker for the current trading day.
 - `collector_runs`: collector audit records.
 - `ticker_transitions`: audited `.tw`/`.two` mapping changes for existing tickers.
+- `report_targets`: cached date/market-to-spreadsheet routing, including numeric `sheetId` and report topology.
 - `latest_stock_prices`: convenient view joining latest close and latest intraday price.
 - On first setup, retain at least 21 closes for every active stock: the prior close plus the close 20 trading sessions earlier.
 - When a new stock appears, add it and backfill at least 21 closes.
@@ -73,6 +99,7 @@ Omit `--db` to use the stable default. `calculate` synchronizes holdings, fills 
 - Capture intraday prices at `09:06`, `10:06`, `11:06`, `12:06`, and `13:06` Asia/Taipei.
 - Refresh prior closes at `08:55` and the current final close at `14:10`.
 - On macOS, use a `launchd` LaunchAgent with those seven calendar intervals. Generate paths from the actual project and Python locations; do not copy hardcoded paths from another project.
+- This Mac Mini's verified template is [`scripts/com.rolandtalk.today-gain-prices.plist`](scripts/com.rolandtalk.today-gain-prices.plist). It targets the installed skill and persistent database; install it in `~/Library/LaunchAgents`, reload it, and verify the registered arguments whenever either path changes.
 - If the Mac is asleep or the market endpoint returns another trading date, leave that sample missing rather than fabricating an on-time observation.
 
 Manual operations:
@@ -102,7 +129,7 @@ ORDER BY trade_date, sample_time, ticker;
 
 ### Fast-mode verification
 
-Perform one final values check only. Verify:
+Use the Turbo manifest plus one final bounded Sheet readback. Verify:
 
 - `PRAGMA integrity_check` returns `ok`.
 - Every active stock has at least 21 closes after initialization/backfill.
@@ -145,15 +172,15 @@ Never write report data into the template itself. For a new report, copy the ent
 
 Create and author the spreadsheet directly with connected Google Drive/Sheets tools:
 
-1. Search Drive for an existing Google Sheet with the exact same market-prefixed `YYMMDD` title.
+1. Query `report-target` first. On a cache hit, use that exact spreadsheet and skip Drive search and metadata discovery. On a miss, search Drive for an existing Google Sheet with the exact same market-prefixed `YYMMDD` title.
 2. If a same-day file exists, update that spreadsheet in place. Do not create a duplicate same-day file.
 3. If no same-day file exists, copy the native template and give the copy the exact report title. Do not create a blank spreadsheet.
-4. Read the target spreadsheet metadata and use its returned spreadsheet ID, exact tab title, and `sheetId`.
+4. On a cache miss, read target metadata once, then store the returned spreadsheet ID, exact tab title, `sheetId`, and topology with `cache-report`.
 5. For a template-derived report with at most 50 holdings, perform one coherent `batchUpdate`: clear values in `A2:O51`, hide rows 2:51, unhide exactly the populated holding rows, and write static report values into those rows. Keep row 52 and its total formulas intact.
 6. Preserve the template’s number formats, header style, frozen row/columns, column widths, alternating-row rule, filter, and conditional-format rules. Do not recreate them on every run.
 7. If the report has more than 50 holdings, insert sufficient rows before row 52, copy a complete holding-row format into them, move/update the total row, and extend the filter and conditional-format ranges before writing.
 8. For an older same-day report that does not have the template’s row-52 total topology, update its existing bounded report area safely instead of forcing a template conversion.
-9. Read the populated range and metadata back for verification.
+9. Read the populated range back once for verification. Re-read metadata only after a structural edit or a cached-target failure.
 
 Highlight the five largest numeric holding cells separately in each of these columns with an orange background:
 
@@ -167,4 +194,4 @@ Keep the market symbol visible. Use formulas when the user may edit prices; othe
 
 For Taiwan reports, write the static calculated values from SQLite output into `昨日收盤價`, `本日盈虧`, `本日報酬率`, `20日盈虧`, and `20日報酬率`. Do not replace them with GoogleFinance formulas. GoogleFinance is not the fallback for missing Taiwan history: rerun/backfill FinMind and stop if the database still lacks 21 closes.
 
-Before delivery, confirm every screenshot holding appears once, recalculate two rows, verify totals, check for formula errors, confirm exactly five orange holding cells in each target column, and state the market-data date.
+Before delivery, use `manifest.json` to confirm every screenshot holding appears once, recalculate two rows, verify totals, check the bounded readback for formula errors, and compare the seven expected top-five row lists with the preserved conditional rules. State the market-data date. Do not perform additional full-sheet reads after these checks pass.

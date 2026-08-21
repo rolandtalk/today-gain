@@ -127,6 +127,17 @@ def create_schema(db: sqlite3.Connection) -> None:
             reason TEXT NOT NULL DEFAULT 'holdings-sync'
         );
 
+        CREATE TABLE IF NOT EXISTS report_targets (
+            market TEXT NOT NULL,
+            report_date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            spreadsheet_id TEXT NOT NULL,
+            sheet_id INTEGER NOT NULL,
+            topology TEXT NOT NULL CHECK (topology IN ('template-50', 'legacy')),
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (market, report_date)
+        );
+
         DROP VIEW IF EXISTS latest_stock_prices;
         CREATE VIEW latest_stock_prices AS
         SELECT
@@ -398,6 +409,29 @@ def log_run(db: sqlite3.Connection, command: str, rows: int, detail: str) -> Non
     )
 
 
+def database_status(db: sqlite3.Connection) -> dict:
+    active = db.execute("SELECT COUNT(*) FROM stock_universe WHERE active=1").fetchone()[0]
+    closes = db.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
+    intraday = db.execute("SELECT COUNT(*) FROM intraday_prices").fetchone()[0]
+    short = db.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT u.ticker FROM stock_universe u
+            LEFT JOIN prices p ON p.ticker=u.ticker
+            WHERE u.active=1 GROUP BY u.ticker HAVING COUNT(p.trade_date) < ?
+        )
+        """,
+        (REQUIRED_CLOSES,),
+    ).fetchone()[0]
+    return {
+        "integrity": db.execute("PRAGMA integrity_check").fetchone()[0],
+        "active_stocks": active,
+        "daily_closes": closes,
+        "intraday_rows": intraday,
+        "stocks_below_required_closes": short,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -412,6 +446,17 @@ def main() -> int:
     calculate.add_argument("--holdings", type=Path, required=True)
     calculate.add_argument("--as-of", help="screenshot date in YYYY-MM-DD; default: today in Taipei")
     calculate.add_argument("--output", type=Path, help="write Sheet-ready UTF-8 CSV")
+    cache = sub.add_parser("cache-report")
+    cache.add_argument("--date", required=True)
+    cache.add_argument("--market", default="tw")
+    cache.add_argument("--title", required=True)
+    cache.add_argument("--spreadsheet-id", required=True)
+    cache.add_argument("--sheet-id", type=int, required=True)
+    cache.add_argument("--topology", choices=("template-50", "legacy"), required=True)
+    target = sub.add_parser("report-target")
+    target.add_argument("--date", required=True)
+    target.add_argument("--market", default="tw")
+    sub.add_parser("status")
     sub.add_parser("close")
     sub.add_parser("run")
     args = parser.parse_args()
@@ -438,6 +483,30 @@ def main() -> int:
                 f"report date={report_date}; holdings={len(report)}; new stocks={added}; "
                 f"backfilled={backfilled}; output={args.output or 'stdout'}"
             )
+        elif args.command == "cache-report":
+            db.execute(
+                """
+                INSERT INTO report_targets
+                    (market, report_date, title, spreadsheet_id, sheet_id, topology, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(market, report_date) DO UPDATE SET
+                    title=excluded.title, spreadsheet_id=excluded.spreadsheet_id,
+                    sheet_id=excluded.sheet_id, topology=excluded.topology,
+                    updated_at=excluded.updated_at
+                """,
+                (args.market, args.date, args.title, args.spreadsheet_id, args.sheet_id,
+                 args.topology, now_taipei().isoformat(timespec="seconds")),
+            )
+            rows = 1
+            detail = f"cached {args.market} report target for {args.date}"
+        elif args.command == "report-target":
+            target_row = db.execute(
+                "SELECT * FROM report_targets WHERE market=? AND report_date=?",
+                (args.market, args.date),
+            ).fetchone()
+            detail = "cache hit" if target_row else "cache miss"
+        elif args.command == "status":
+            detail = "database status"
         elif args.command == "sample":
             removed = purge_old_intraday(db, today)
             slot = args.time or current.strftime("%H:%M")
@@ -461,6 +530,10 @@ def main() -> int:
     result = {"command": args.command, "rows_written": rows, "detail": detail, "db": str(args.db)}
     if args.command == "calculate" and not args.output:
         result["holdings"] = report
+    elif args.command == "report-target":
+        result["target"] = dict(target_row) if target_row else None
+    elif args.command == "status":
+        result.update(database_status(db))
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
