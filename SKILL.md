@@ -31,11 +31,10 @@ Use [`scripts/today_gain_turbo.py`](scripts/today_gain_turbo.py) after producing
 ```bash
 python3 <skill-dir>/scripts/today_gain_turbo.py \
   --holdings <holdings.csv> --image <screenshot.jpg> \
-  --date <screenshot-date> --output-dir <run-dir> \
-  --ocr-python <vision-venv>/bin/python
+  --date <screenshot-date> --output-dir <run-dir>
 ```
 
-The runner calculates the report, checks SQLite integrity/readiness, looks up the same-day Sheet target cached in `report_targets`, prepares one `sheets-batch.json`, and writes a compact `manifest.json` containing totals, dates, duplicates, and expected top-five rows. The optional OCR pass uses [`scripts/today_gain_ocr.py`](scripts/today_gain_ocr.py) with local macOS Vision. Install `pyobjc-framework-Vision` and `pyobjc-framework-Quartz` in its Python environment once. OCR is an audit aid: if extraction is incomplete or uncertain, verify/correct the holdings CSV before any Sheet write.
+The runner calculates the report, checks SQLite integrity/readiness, looks up the same-day Sheet target cached in `report_targets`, prepares one `sheets-batch.json`, and writes a compact `manifest.json` containing totals, dates, duplicates, and expected top-five rows. The optional OCR pass uses [`scripts/today_gain_ocr.py`](scripts/today_gain_ocr.py) with local macOS Vision. Its stable environment is `~/.codex/data/today-gain/ocr-venv`; install `pyobjc-framework-Vision` and `pyobjc-framework-Quartz` there once. Override it with `--ocr-python` only when necessary. OCR is an audit aid: if extraction is incomplete or uncertain, verify/correct the holdings CSV before any Sheet write.
 
 If the manifest says `ready`, call the Sheets batch-update action once with its cached `spreadsheet_id` and the requests in `sheets-batch.json`, then perform one bounded readback. If it says `needs_sheet_target`, do the normal Drive search/copy and metadata read once, cache the resolved target, then rerun Turbo:
 

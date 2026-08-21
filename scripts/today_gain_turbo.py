@@ -15,6 +15,7 @@ import today_gain_prices as prices
 
 
 SHEET_COLUMNS = prices.REPORT_COLUMNS[:15]
+PERSISTENT_OCR_PYTHON = prices.DEFAULT_DB.parent / "ocr-venv" / "bin" / "python"
 
 
 def cell(value):
@@ -150,7 +151,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--holdings", type=Path, help="verified screenshot holdings CSV")
     parser.add_argument("--image", type=Path, help="optional screenshot for local OCR audit")
-    parser.add_argument("--ocr-python", default=sys.executable)
+    parser.add_argument(
+        "--ocr-python",
+        default=str(PERSISTENT_OCR_PYTHON if PERSISTENT_OCR_PYTHON.exists() else Path(sys.executable)),
+    )
     parser.add_argument("--date", required=True)
     parser.add_argument("--market", default="tw")
     parser.add_argument("--db", type=Path, default=prices.DEFAULT_DB)
