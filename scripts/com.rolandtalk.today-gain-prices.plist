@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.rolandtalk.today-gain-prices</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/rolandtalkonmini/.codex/skills/today-gain/scripts/today_gain_prices.py</string>
+    <string>--db</string>
+    <string>/Users/rolandtalkonmini/.codex/data/today-gain/today_gain.sqlite3</string>
+    <string>run</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/rolandtalkonmini/.codex/data/today-gain</string>
+  <key>StandardOutPath</key><string>/Users/rolandtalkonmini/.codex/data/today-gain/collector.log</string>
+  <key>StandardErrorPath</key><string>/Users/rolandtalkonmini/.codex/data/today-gain/collector-error.log</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>55</integer></dict>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>6</integer></dict>
+    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>6</integer></dict>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>6</integer></dict>
+    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>6</integer></dict>
+    <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>6</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>10</integer></dict>
+  </array>
+</dict>
+</plist>
