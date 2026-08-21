@@ -22,6 +22,8 @@ For Taiwan stocks, keep the broker ticker in `代號`. Use `<ticker>.tw` for lis
 
 Store the extracted rows in UTF-8 CSV. New screenshots are authoritative for the active stock universe: add newly seen stocks, update existing stocks, and mark absent stocks inactive without deleting their historical closes.
 
+Accept small differences between the broker's portfolio-header totals and the sum of its displayed holding rows when they are attributable to hidden precision or per-row rounding. Keep each visible holding value exactly as displayed, make the Sheet total equal the sum of those Sheet rows, and do not delay, block, or alter the report merely to force agreement with the broker header. Still investigate differences that suggest a missing holding or transcription error rather than rounding.
+
 Reuse a stored market symbol when a later CSV leaves `GoogleFinance代號` blank. When a valid `.tw`/`.two` value changes for an existing ticker, update `stock_universe` and record the old and new mappings in `ticker_transitions`. Visually verify the change before calculation; never guess an exchange transition.
 
 ### Turbo workflow
@@ -193,4 +195,4 @@ Keep the market symbol visible. Use formulas when the user may edit prices; othe
 
 For Taiwan reports, write the static calculated values from SQLite output into `昨日收盤價`, `本日盈虧`, `本日報酬率`, `20日盈虧`, and `20日報酬率`. Do not replace them with GoogleFinance formulas. GoogleFinance is not the fallback for missing Taiwan history: rerun/backfill FinMind and stop if the database still lacks 21 closes.
 
-Before delivery, use `manifest.json` to confirm every screenshot holding appears once, recalculate two rows, verify totals, check the bounded readback for formula errors, and compare the seven expected top-five row lists with the preserved conditional rules. State the market-data date. Do not perform additional full-sheet reads after these checks pass.
+Before delivery, use `manifest.json` to confirm every screenshot holding appears once, recalculate two rows, verify the Sheet totals against its displayed holding rows, check the bounded readback for formula errors, and compare the seven expected top-five row lists with the preserved conditional rules. Treat a confirmed broker-header rounding difference as informational only; do not make another tool call solely to reconcile it. State the market-data date. Do not perform additional full-sheet reads after these checks pass.
