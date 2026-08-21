@@ -1,14 +1,15 @@
 ---
 name: today-gain
-description: Extract Taiwan brokerage holdings from screenshots and calculate stock gains using either a Google Sheet or a persistent SQLite price database. Use when the user says "today.gain", "today-gain", "跑 today.gain", requests a holdings profit/loss sheet, asks for fast mode or SQLite mode, or wants scheduled daily-close and intraday-price collection for the screenshot’s stock universe.
+description: Extract brokerage holdings from screenshots or portfolio sheets, calculate Taiwan reports with persistent SQLite prices and US reports with market-date-aware Google Finance history, and publish Google Sheets reports. Use when the user says "today.gain", "today-gain", "跑 today.gain", requests a holdings profit/loss sheet, asks for fast mode or SQLite mode, or wants scheduled daily-close and intraday-price collection.
 ---
 
 # Today Gain
 
-## Choose the mode
+## Choose the workflow
 
-- Use **Google Sheet mode** for the normal screenshot-to-report request.
-- Use **SQLite fast mode** when the user mentions fast mode, SQLite, a price database, scheduled collection, daily closes, or intraday snapshots.
+- Use the Turbo workflow below by default for repeated Taiwan reports. It combines calculation, database checks, cached report lookup, Sheets-batch preparation, and verification into one local command.
+- For Taiwan holdings, always use the persistent SQLite database for yesterday and 20D closing prices, then publish the resulting values to Google Sheets. This is the default screenshot-to-report workflow; the user does not need to say “fast mode.”
+- For US or other non-Taiwan holdings, use Google Sheet mode without SQLite. For US holdings, anchor comparisons to the completed US session represented by the source prices; do not infer it from the Asia/Taipei report date.
 - Preserve an existing database and update it in place. Never recreate it merely because a new screenshot arrives.
 
 ## Extract holdings
@@ -19,11 +20,38 @@ Read every visible holding exactly once. Capture:
 
 For Taiwan stocks, keep the broker ticker in `代號`. Use `<ticker>.tw` for listed shares and `<ticker>.two` for OTC shares in `GoogleFinance代號`. Visually verify ambiguous names and tickers before fetching prices.
 
-Store the extracted rows in UTF-8 CSV when using SQLite mode. New screenshots are authoritative for the active stock universe: add newly seen stocks, update existing stocks, and mark absent stocks inactive without deleting their historical closes.
+Store the extracted rows in UTF-8 CSV. New screenshots are authoritative for the active stock universe: add newly seen stocks, update existing stocks, and mark absent stocks inactive without deleting their historical closes.
 
-## SQLite fast mode
+Accept small differences between the broker's portfolio-header totals and the sum of its displayed holding rows when they are attributable to hidden precision or per-row rounding. Keep each visible holding value exactly as displayed, make the Sheet total equal the sum of those Sheet rows, and do not delay, block, or alter the report merely to force agreement with the broker header. Still investigate differences that suggest a missing holding or transcription error rather than rounding.
 
-Use [`scripts/today_gain_prices.py`](scripts/today_gain_prices.py). Default the database to `outputs/today-gain/today_gain.sqlite3` inside the active project unless the user supplies another path.
+Reuse a stored market symbol when a later CSV leaves `GoogleFinance代號` blank. When a valid `.tw`/`.two` value changes for an existing ticker, update `stock_universe` and record the old and new mappings in `ticker_transitions`. Visually verify the change before calculation; never guess an exchange transition.
+
+### Turbo workflow
+
+Use [`scripts/today_gain_turbo.py`](scripts/today_gain_turbo.py) after producing the verified holdings CSV:
+
+```bash
+python3 <skill-dir>/scripts/today_gain_turbo.py \
+  --holdings <holdings.csv> --image <screenshot.jpg> \
+  --date <screenshot-date> --output-dir <run-dir>
+```
+
+The runner calculates the report, checks SQLite integrity/readiness, looks up the same-day Sheet target cached in `report_targets`, prepares one `sheets-batch.json`, and writes a compact `manifest.json` containing totals, dates, duplicates, and expected top-five rows. The optional OCR pass uses [`scripts/today_gain_ocr.py`](scripts/today_gain_ocr.py) with local macOS Vision. Its stable environment is `~/.codex/data/today-gain/ocr-venv`; install `pyobjc-framework-Vision` and `pyobjc-framework-Quartz` there once. Override it with `--ocr-python` only when necessary. OCR is an audit aid: if extraction is incomplete or uncertain, verify/correct the holdings CSV before any Sheet write.
+
+If the manifest says `ready`, call the Sheets batch-update action once with its cached `spreadsheet_id` and the requests in `sheets-batch.json`, then perform one bounded readback. If it says `needs_sheet_target`, do the normal Drive search/copy and metadata read once, cache the resolved target, then rerun Turbo:
+
+```bash
+python3 <skill-dir>/scripts/today_gain_prices.py cache-report \
+  --date <date> --market tw --title <台股YYMMDD> \
+  --spreadsheet-id <id> --sheet-id <numeric-id> \
+  --topology <template-50-or-legacy>
+```
+
+Do not repeat Drive search or metadata discovery after a cache hit unless the cached write fails because the file was deleted, renamed, or structurally changed. For a same-day rerun, reuse the cached target and overwrite only the bounded report values.
+
+## SQLite-backed calculation
+
+Use [`scripts/today_gain_prices.py`](scripts/today_gain_prices.py). Its stable default database is `~/.codex/data/today-gain/today_gain.sqlite3`, shared by future Today Gain runs. Use another path only when the user explicitly requests it.
 
 SQLite fast mode currently supports Taiwan-listed holdings only. Before writing the database, confirm every `GoogleFinance代號` ends with `.tw` or `.two`. If US, OTCMKTS, NYSE, NASDAQ, BATS, NYSEARCA, or another non-Taiwan symbol appears, do not run the SQLite collector; report that US SQLite support needs a separate price-source implementation instead of storing misleading TWSE/FinMind rows.
 
@@ -41,15 +69,27 @@ python3 <skill-dir>/scripts/today_gain_prices.py \
   --db <db-path> sync-holdings --holdings <holdings.csv>
 ```
 
+For every Taiwan screenshot report, run the combined calculation command instead of calling GoogleFinance formulas:
+
+```bash
+python3 <skill-dir>/scripts/today_gain_prices.py \
+  calculate --holdings <holdings.csv> --as-of <screenshot-date> \
+  --output <calculated.csv>
+```
+
+Omit `--db` to use the stable default. `calculate` synchronizes holdings, fills missing closes through the prior calendar day, ensures 21 closes per active holding, and writes Sheet-ready static values. Treat `昨日收盤日期` and `20D基準日期` in the output as verification fields; do not add them to the required Google Sheet columns unless requested.
+
 ### Storage contract
 
 - `stock_universe`: ticker, name, market symbol, exchange, first/last seen dates, and active status.
 - `prices`: one closing price per ticker and trading day. Retain these indefinitely after initialization.
 - `intraday_prices`: at most five snapshots per active ticker for the current trading day.
 - `collector_runs`: collector audit records.
+- `ticker_transitions`: audited `.tw`/`.two` mapping changes for existing tickers.
+- `report_targets`: cached date/market-to-spreadsheet routing, including numeric `sheetId` and report topology.
 - `latest_stock_prices`: convenient view joining latest close and latest intraday price.
-- On first setup, retain the latest 20 trading-day closes for every active stock.
-- When a new stock appears, add it and backfill its latest 20 trading-day closes.
+- On first setup, retain at least 21 closes for every active stock: the prior close plus the close 20 trading sessions earlier.
+- When a new stock appears, add it and backfill at least 21 closes.
 - At the start of a later calendar day, delete older intraday rows only. Never purge daily closes.
 - Do not store a weekend/holiday stale quote as a current-day snapshot.
 
@@ -60,6 +100,7 @@ python3 <skill-dir>/scripts/today_gain_prices.py \
 - Capture intraday prices at `09:06`, `10:06`, `11:06`, `12:06`, and `13:06` Asia/Taipei.
 - Refresh prior closes at `08:55` and the current final close at `14:10`.
 - On macOS, use a `launchd` LaunchAgent with those seven calendar intervals. Generate paths from the actual project and Python locations; do not copy hardcoded paths from another project.
+- This Mac Mini's verified template is [`scripts/com.rolandtalk.today-gain-prices.plist`](scripts/com.rolandtalk.today-gain-prices.plist). It targets the installed skill and persistent database; install it in `~/Library/LaunchAgents`, reload it, and verify the registered arguments whenever either path changes.
 - If the Mac is asleep or the market endpoint returns another trading date, leave that sample missing rather than fabricating an on-time observation.
 
 Manual operations:
@@ -89,10 +130,11 @@ ORDER BY trade_date, sample_time, ticker;
 
 ### Fast-mode verification
 
-Perform one final values check only. Verify:
+Use the Turbo manifest plus one final bounded Sheet readback. Verify:
 
 - `PRAGMA integrity_check` returns `ok`.
-- Every active stock has at least 20 closes after initialization/backfill.
+- Every active stock has at least 21 closes after initialization/backfill.
+- Every calculated holding has 21 closes through the day before the screenshot.
 - No duplicate `(ticker, trade_date)` or `(ticker, trade_date, sample_time)` keys exist.
 - No older intraday rows remain after the date rolls over.
 - The active stock count matches the extracted screenshot.
@@ -110,31 +152,66 @@ Use:
 
 Add totals for the full `本日盈虧` and `20日盈虧` populations. Keep losses negative and show gain amounts as signed whole numbers and calculated percentages with one decimal place.
 
+### US market-date boundary
+
+For a US portfolio source sheet, first determine the **source market date**: the completed US trading session represented by its current prices. The Asia/Taipei screenshot or report date may be one calendar day later and is not a substitute for this date.
+
+- Set `昨日收盤價` to the last US trading-session close strictly before the source market date.
+- Select the 20D baseline from that same pre-source history, using the existing convention of `offset 20` after sorting closes newest first.
+- Use an explicit date predicate. Do not use only `TODAY()-1` or take the newest Google Finance row without filtering; timezone boundaries can otherwise select the source session itself and make the daily result zero.
+- Fetch through at least the day after the source market date, then filter historical dates with `Col1 < date 'YYYY-MM-DD'`, where `YYYY-MM-DD` is the source market date. Use these formula patterns:
+
+```text
+hist = GOOGLEFINANCE(C2,"close",<start-date>,<source-market-date + 1 day>)
+prior = INDEX(QUERY(hist,"select Col2 where Col1 < date 'YYYY-MM-DD' order by Col1 desc limit 1",1),2,1)
+baseline = INDEX(QUERY(hist,"select Col2 where Col1 < date 'YYYY-MM-DD' order by Col1 desc limit 1 offset 20",1),2,1)
+```
+
+After writing, verify more than formula syntax. Count numeric zeros in `本日盈虧` and `本日報酬率`. A few individual zeros can be legitimate, but an all-zero or nearly all-zero portfolio is a date-boundary failure until disproved. Test one holding against a distinct prior-session close, correct the date filter, and only then roll the formula out to every row. In the final result, state both the source US market date and the prior-close date.
+
 ## Google Sheet mode
 
-Create or update a Google Sheet named with the market prefix plus `YYMMDD`, using the Asia/Taipei date from the run date. Use `美股YYMMDD` when the target symbols are US-listed equities, including `NYSE:*`, `NASDAQ:*`, `BATS:*`, `NYSEARCA:*`, or `OTCMKTS:*`. Use `台股YYMMDD` for Taiwan-listed holdings. For example, August 17, 2026 becomes `美股260817` for US holdings and `台股260817` for Taiwan holdings. Use tab `本日個股盈虧`, unless the user supplies another name. Use these columns in order:
+Create or update a Google Sheet named with the market prefix plus `YYMMDD`, using the Asia/Taipei screenshot date. Use `美股YYMMDD` when the target symbols are US-listed equities, including `NYSE:*`, `NASDAQ:*`, `BATS:*`, `NYSEARCA:*`, or `OTCMKTS:*`. Use `台股YYMMDD` for Taiwan-listed holdings. For example, August 17, 2026 becomes `美股260817` for US holdings and `台股260817` for Taiwan holdings. Use tab `本日個股盈虧`, unless the user supplies another name. Use these columns in order:
 
 `股票,代號,GoogleFinance代號,股數,截圖市價,成本價,成本,目前市值,庫存損益,庫存報酬率,昨日收盤價,本日盈虧,本日報酬率,20日盈虧,20日報酬率`
 
+Use the native Google Sheets template:
+
+- Title: `Today Gain 台股報表範本`
+- File ID: `1kq-r2Bpgaa9sxcyrDfxQ_Og7ni_eWDAQJVzflno1GSU`
+- URL: `https://docs.google.com/spreadsheets/d/1kq-r2Bpgaa9sxcyrDfxQ_Og7ni_eWDAQJVzflno1GSU/edit`
+- Tab: `本日個股盈虧`
+- Header: row 1
+- Preformatted holding slots: rows 2:51, hidden while unused
+- Fixed total row: row 52
+- Capacity: 50 holdings
+
+For U.S. reports, make `截圖市價` a live market-price formula by default rather than a static extracted value. In the first holding row use `=IFERROR(GOOGLEFINANCE(C2,"price"),"")` and fill it down through the populated holdings, preserving the column's number format. The `GoogleFinance代號` in column C must include the verified exchange prefix. Confirm every live-price cell resolves to a number; if a symbol is unsupported, correct its exchange mapping rather than silently leaving the row blank. Because columns H:O depend on `截圖市價`, verify that their formulas and totals recalculate after the live-price rollout. Note that Google Finance quotes may be delayed.
+
+Never write report data into the template itself. For a new report, copy the entire native template with the Drive file-copy action and set the copy title to the market-prefixed `YYMMDD` title. Verify that the destination spreadsheet ID differs from the template ID before writing.
+
 Create and author the spreadsheet directly with connected Google Drive/Sheets tools:
 
-1. Search Drive for an existing Google Sheet with the exact same market-prefixed `YYMMDD` title.
-2. If a same-day file exists, update that spreadsheet in place: clear or overwrite the existing `本日個股盈虧` tab content and formatting for the populated report area, then write the new report. Do not create a duplicate same-day file.
-3. If no same-day file exists, call the native Drive file-creation action with MIME type `application/vnd.google-apps.spreadsheet`.
-4. Read the target spreadsheet metadata and use the returned spreadsheet ID, exact tab title, and `sheetId`.
-5. Rename the tab to `本日個股盈虧` when needed.
-6. Write the complete bounded values/formulas block with Sheets `batchUpdate` requests.
-7. Apply number formats, header style, frozen row/columns, column widths, alternating-row formatting, and a basic filter over holding rows only.
-8. Read the populated range and metadata back for verification.
+1. Query `report-target` first. On a cache hit, use that exact spreadsheet and skip Drive search and metadata discovery. On a miss, search Drive for an existing Google Sheet with the exact same market-prefixed `YYMMDD` title.
+2. If a same-day file exists, update that spreadsheet in place. Do not create a duplicate same-day file.
+3. If no same-day file exists, copy the native template and give the copy the exact report title. Do not create a blank spreadsheet.
+4. On a cache miss, read target metadata once, then store the returned spreadsheet ID, exact tab title, `sheetId`, and topology with `cache-report`.
+5. For a template-derived report with at most 50 holdings, perform one coherent `batchUpdate`: clear values in `A2:O51`, hide rows 2:51, unhide exactly the populated holding rows, and write static report values into those rows. Keep row 52 and its total formulas intact.
+6. Preserve the template’s number formats, header style, frozen row/columns, column widths, alternating-row rule, filter, and conditional-format rules. Do not recreate them on every run.
+7. If the report has more than 50 holdings, insert sufficient rows before row 52, copy a complete holding-row format into them, move/update the total row, and extend the filter and conditional-format ranges before writing.
+8. For an older same-day report that does not have the template’s row-52 total topology, update its existing bounded report area safely instead of forcing a template conversion.
+9. Read the populated range back once for verification. Re-read metadata only after a structural edit or a cached-target failure.
 
 Highlight the five largest numeric holding cells separately in each of these columns with an orange background:
 
 `目前市值,庫存損益,庫存報酬率,本日盈虧,本日報酬率,20日盈虧,20日報酬率`
 
-Exclude the header and `合計` row. Add one conditional-format rule per column, with the orange rule ahead of the alternating-row rule so the highlight remains visible. To select exactly five cells even when values tie, rank descending and break ties by row order; for example, for `H2:H21`, use `=RANK(H2,$H$2:$H$21)+COUNTIF($H$2:H2,H2)-1<=5`. Adjust the ending row to the actual last holding row and apply the equivalent formula to each target column. Use a light orange fill such as RGB `(1.0, 0.85, 0.65)`.
+Exclude the header, blank slots, and `合計` row. The template already contains one orange conditional-format rule per target column ahead of the alternating-row rule. Its rules cover rows 2:51, test `ISNUMBER`, rank only numeric cells with `FILTER`, and break ties by row order. Preserve these rules for reports with at most 50 holdings. Use a light orange fill such as RGB `(1.0, 0.85, 0.65)`.
 
 Never create, transform, upload, import, export, or verify an Excel/XLSX file for Google Sheet mode. If direct native Google Sheet creation or writing is unavailable, stop and report the connector limitation instead of falling back to Excel.
 
 Keep the market symbol visible. Use formulas when the user may edit prices; otherwise sourced static values are acceptable. Freeze row 1 and columns A:B, make headers bold, filter all holding rows, apply subtle alternating rows, and leave a visually distinct `合計` row outside the filter.
 
-Before delivery, confirm every screenshot holding appears once, recalculate two rows, verify totals, check for formula errors, confirm exactly five orange holding cells in each target column, and state the market-data date.
+For Taiwan reports, write the static calculated values from SQLite output into `昨日收盤價`, `本日盈虧`, `本日報酬率`, `20日盈虧`, and `20日報酬率`. Do not replace them with GoogleFinance formulas. GoogleFinance is not the fallback for missing Taiwan history: rerun/backfill FinMind and stop if the database still lacks 21 closes.
+
+Before delivery, use `manifest.json` to confirm every screenshot holding appears once, recalculate two rows, verify the Sheet totals against its displayed holding rows, check the bounded readback for formula errors, and compare the seven expected top-five row lists with the preserved conditional rules. Treat a confirmed broker-header rounding difference as informational only; do not make another tool call solely to reconcile it. State the market-data date. Do not perform additional full-sheet reads after these checks pass.
