@@ -1,6 +1,6 @@
 ---
 name: today-gain
-description: Extract Taiwan brokerage holdings from screenshots, persist closing prices in SQLite, calculate daily and 20-trading-day gains, and publish Google Sheets reports. Use when the user says "today.gain", "today-gain", "跑 today.gain", requests a holdings profit/loss sheet, asks for fast mode or SQLite mode, or wants scheduled daily-close and intraday-price collection.
+description: Extract brokerage holdings from screenshots or portfolio sheets, calculate Taiwan reports with persistent SQLite prices and US reports with market-date-aware Google Finance history, and publish Google Sheets reports. Use when the user says "today.gain", "today-gain", "跑 today.gain", requests a holdings profit/loss sheet, asks for fast mode or SQLite mode, or wants scheduled daily-close and intraday-price collection.
 ---
 
 # Today Gain
@@ -9,7 +9,7 @@ description: Extract Taiwan brokerage holdings from screenshots, persist closing
 
 - Use the Turbo workflow below by default for repeated Taiwan reports. It combines calculation, database checks, cached report lookup, Sheets-batch preparation, and verification into one local command.
 - For Taiwan holdings, always use the persistent SQLite database for yesterday and 20D closing prices, then publish the resulting values to Google Sheets. This is the default screenshot-to-report workflow; the user does not need to say “fast mode.”
-- For US or other non-Taiwan holdings, use Google Sheet mode without SQLite and report that the Taiwan collector does not support those markets.
+- For US or other non-Taiwan holdings, use Google Sheet mode without SQLite. For US holdings, anchor comparisons to the completed US session represented by the source prices; do not infer it from the Asia/Taipei report date.
 - Preserve an existing database and update it in place. Never recreate it merely because a new screenshot arrives.
 
 ## Extract holdings
@@ -151,6 +151,23 @@ Use:
 - `20日報酬率 = (截圖市價 - 20D基準價) / 20D基準價`
 
 Add totals for the full `本日盈虧` and `20日盈虧` populations. Keep losses negative and show gain amounts as signed whole numbers and calculated percentages with one decimal place.
+
+### US market-date boundary
+
+For a US portfolio source sheet, first determine the **source market date**: the completed US trading session represented by its current prices. The Asia/Taipei screenshot or report date may be one calendar day later and is not a substitute for this date.
+
+- Set `昨日收盤價` to the last US trading-session close strictly before the source market date.
+- Select the 20D baseline from that same pre-source history, using the existing convention of `offset 20` after sorting closes newest first.
+- Use an explicit date predicate. Do not use only `TODAY()-1` or take the newest Google Finance row without filtering; timezone boundaries can otherwise select the source session itself and make the daily result zero.
+- Fetch through at least the day after the source market date, then filter historical dates with `Col1 < date 'YYYY-MM-DD'`, where `YYYY-MM-DD` is the source market date. Use these formula patterns:
+
+```text
+hist = GOOGLEFINANCE(C2,"close",<start-date>,<source-market-date + 1 day>)
+prior = INDEX(QUERY(hist,"select Col2 where Col1 < date 'YYYY-MM-DD' order by Col1 desc limit 1",1),2,1)
+baseline = INDEX(QUERY(hist,"select Col2 where Col1 < date 'YYYY-MM-DD' order by Col1 desc limit 1 offset 20",1),2,1)
+```
+
+After writing, verify more than formula syntax. Count numeric zeros in `本日盈虧` and `本日報酬率`. A few individual zeros can be legitimate, but an all-zero or nearly all-zero portfolio is a date-boundary failure until disproved. Test one holding against a distinct prior-session close, correct the date filter, and only then roll the formula out to every row. In the final result, state both the source US market date and the prior-close date.
 
 ## Google Sheet mode
 
