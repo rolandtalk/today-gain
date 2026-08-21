@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Maintain Today Gain daily closes and five intraday snapshots in SQLite."""
+"""Maintain Today Gain prices and calculate SQLite-backed gain reports."""
 
 from __future__ import annotations
 
@@ -21,6 +21,14 @@ FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 TWSE_MIS_URL = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
 INTRADAY_SLOTS = {"09:06", "10:06", "11:06", "12:06", "13:06"}
 TAIWAN_SYMBOL_SUFFIXES = (".tw", ".two")
+BASELINE_SESSIONS = 20
+REQUIRED_CLOSES = BASELINE_SESSIONS + 1
+DEFAULT_DB = Path.home() / ".codex" / "data" / "today-gain" / "today_gain.sqlite3"
+REPORT_COLUMNS = [
+    "股票", "代號", "GoogleFinance代號", "股數", "截圖市價", "成本價", "成本",
+    "目前市值", "庫存損益", "庫存報酬率", "昨日收盤價", "本日盈虧",
+    "本日報酬率", "20日盈虧", "20日報酬率", "昨日收盤日期", "20D基準日期",
+]
 
 
 def now_taipei() -> datetime:
@@ -108,6 +116,17 @@ def create_schema(db: sqlite3.Connection) -> None:
             detail TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS ticker_transitions (
+            transition_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            old_symbol TEXT NOT NULL,
+            new_symbol TEXT NOT NULL,
+            old_exchange TEXT NOT NULL,
+            new_exchange TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT 'holdings-sync'
+        );
+
         DROP VIEW IF EXISTS latest_stock_prices;
         CREATE VIEW latest_stock_prices AS
         SELECT
@@ -148,7 +167,9 @@ def finmind_history(ticker: str, start_date: str, end_date: str) -> list[tuple[s
     return [(row["date"], float(row["close"])) for row in payload.get("data", [])]
 
 
-def backfill_stock(db: sqlite3.Connection, ticker: str, as_of: str, keep: int = 20) -> int:
+def backfill_stock(
+    db: sqlite3.Connection, ticker: str, as_of: str, keep: int = REQUIRED_CLOSES
+) -> int:
     end = datetime.strptime(as_of, "%Y-%m-%d").date()
     start = end - timedelta(days=60)
     rows = finmind_history(ticker, start.isoformat(), as_of)[-keep:]
@@ -174,12 +195,33 @@ def sync_holdings(db: sqlite3.Connection, csv_path: Path, as_of: str) -> tuple[i
         for row in csv.DictReader(handle):
             ticker = row["代號"].strip()
             symbol = row["GoogleFinance代號"].strip().lower()
+            prior = db.execute(
+                "SELECT market_symbol, exchange FROM stock_universe WHERE ticker=?", (ticker,)
+            ).fetchone()
+            if not symbol and prior:
+                symbol = prior["market_symbol"]
             if not symbol.endswith(TAIWAN_SYMBOL_SUFFIXES):
                 raise ValueError(
                     f"{ticker}: SQLite fast mode currently supports Taiwan symbols only "
                     f"(.tw/.two), got {row['GoogleFinance代號'].strip()!r}"
                 )
             exchange = "otc" if symbol.endswith(".two") else "tse"
+            if prior and (prior["market_symbol"] != symbol or prior["exchange"] != exchange):
+                db.execute(
+                    """
+                    INSERT INTO ticker_transitions
+                        (ticker, changed_at, old_symbol, new_symbol, old_exchange, new_exchange)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ticker,
+                        now_taipei().isoformat(timespec="seconds"),
+                        prior["market_symbol"],
+                        symbol,
+                        prior["exchange"],
+                        exchange,
+                    ),
+                )
             seen.add(ticker)
             db.execute(
                 """
@@ -195,43 +237,17 @@ def sync_holdings(db: sqlite3.Connection, csv_path: Path, as_of: str) -> tuple[i
                 """,
                 (ticker, row["股票"].strip(), symbol, exchange, as_of, as_of),
             )
+            stored_closes = db.execute(
+                "SELECT COUNT(*) FROM prices WHERE ticker=?", (ticker,)
+            ).fetchone()[0]
+            if stored_closes < REQUIRED_CLOSES:
+                price_rows += backfill_stock(db, ticker, as_of)
             if ticker not in existing:
-                stored_closes = db.execute(
-                    "SELECT COUNT(*) FROM prices WHERE ticker=?", (ticker,)
-                ).fetchone()[0]
-                if stored_closes < 20:
-                    price_rows += backfill_stock(db, ticker, as_of, keep=20)
                 added += 1
     if seen:
         placeholders = ",".join("?" for _ in seen)
         db.execute(f"UPDATE stock_universe SET active=0 WHERE ticker NOT IN ({placeholders})", tuple(sorted(seen)))
     return added, price_rows
-
-
-def migrate_existing_prices(db: sqlite3.Connection, as_of: str) -> int:
-    """On first migration, keep only the most recent 20 closes per stock."""
-    marker = db.execute("SELECT COUNT(*) FROM collector_runs WHERE command='initial-prune-20d'").fetchone()[0]
-    if marker:
-        return 0
-    before = db.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
-    db.execute(
-        """
-        DELETE FROM prices
-        WHERE rowid IN (
-            SELECT rowid FROM (
-                SELECT rowid,
-                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY trade_date DESC) AS rn
-                FROM prices
-            ) WHERE rn > 20
-        )
-        """
-    )
-    removed = before - db.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
-    db.execute(
-        "INSERT INTO collector_runs(started_at, command, status, rows_written, detail) VALUES (?, 'initial-prune-20d', 'ok', 0, ?)",
-        (now_taipei().isoformat(timespec="seconds"), f"removed {removed} older daily closes; as-of {as_of}"),
-    )
-    return removed
 
 
 def refresh_daily_closes(db: sqlite3.Connection, as_of: str) -> int:
@@ -258,6 +274,69 @@ def refresh_daily_closes(db: sqlite3.Connection, as_of: str) -> int:
         )
         rows_written += len(history)
     return rows_written
+
+
+def ensure_report_history(db: sqlite3.Connection, ticker: str, cutoff: str) -> int:
+    count = db.execute(
+        "SELECT COUNT(*) FROM prices WHERE ticker=? AND trade_date<=?", (ticker, cutoff)
+    ).fetchone()[0]
+    if count >= REQUIRED_CLOSES:
+        return 0
+    return backfill_stock(db, ticker, cutoff, keep=REQUIRED_CLOSES)
+
+
+def calculate_report(db: sqlite3.Connection, csv_path: Path, as_of: str) -> list[dict]:
+    cutoff = (datetime.strptime(as_of, "%Y-%m-%d").date() - timedelta(days=1)).isoformat()
+    refresh_daily_closes(db, cutoff)
+    source_rows: list[dict] = []
+    with csv_path.open(newline="", encoding="utf-8-sig") as handle:
+        source_rows = list(csv.DictReader(handle))
+    output: list[dict] = []
+    for source in source_rows:
+        ticker = source["代號"].strip()
+        ensure_report_history(db, ticker, cutoff)
+        closes = list(
+            db.execute(
+                """
+                SELECT trade_date, close FROM prices
+                WHERE ticker=? AND trade_date<=?
+                ORDER BY trade_date DESC LIMIT ?
+                """,
+                (ticker, cutoff, REQUIRED_CLOSES),
+            )
+        )
+        if len(closes) < REQUIRED_CLOSES:
+            raise RuntimeError(
+                f"{ticker}: need {REQUIRED_CLOSES} closes through {cutoff}, got {len(closes)}"
+            )
+        shares = number(source["股數"])
+        current = number(source["截圖市價"])
+        if shares is None or current is None:
+            raise ValueError(f"{ticker}: 股數 and 截圖市價 are required")
+        prior = float(closes[0]["close"])
+        baseline = float(closes[BASELINE_SESSIONS]["close"])
+        row = {column: source.get(column, "") for column in REPORT_COLUMNS[:10]}
+        row.update(
+            {
+                "昨日收盤價": prior,
+                "本日盈虧": (current - prior) * shares,
+                "本日報酬率": (current - prior) / prior,
+                "20日盈虧": (current - baseline) * shares,
+                "20日報酬率": (current - baseline) / baseline,
+                "昨日收盤日期": closes[0]["trade_date"],
+                "20D基準日期": closes[BASELINE_SESSIONS]["trade_date"],
+            }
+        )
+        output.append(row)
+    return output
+
+
+def write_report_csv(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=REPORT_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def purge_old_intraday(db: sqlite3.Connection, today: str) -> int:
@@ -321,7 +400,7 @@ def log_run(db: sqlite3.Connection, command: str, rows: int, detail: str) -> Non
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", type=Path, required=True)
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     sub = parser.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init")
     init.add_argument("--holdings", type=Path, required=True)
@@ -329,6 +408,10 @@ def main() -> int:
     sync.add_argument("--holdings", type=Path, required=True)
     sample = sub.add_parser("sample")
     sample.add_argument("--time", choices=sorted(INTRADAY_SLOTS))
+    calculate = sub.add_parser("calculate")
+    calculate.add_argument("--holdings", type=Path, required=True)
+    calculate.add_argument("--as-of", help="screenshot date in YYYY-MM-DD; default: today in Taipei")
+    calculate.add_argument("--output", type=Path, help="write Sheet-ready UTF-8 CSV")
     sub.add_parser("close")
     sub.add_parser("run")
     args = parser.parse_args()
@@ -342,9 +425,19 @@ def main() -> int:
         detail = ""
         if args.command in {"init", "sync-holdings"}:
             added, backfilled = sync_holdings(db, args.holdings, today)
-            pruned = migrate_existing_prices(db, today)
             rows = backfilled
-            detail = f"new stocks={added}; backfilled={backfilled}; initial older closes removed={pruned}"
+            detail = f"new stocks={added}; backfilled={backfilled}"
+        elif args.command == "calculate":
+            report_date = args.as_of or today
+            added, backfilled = sync_holdings(db, args.holdings, report_date)
+            report = calculate_report(db, args.holdings, report_date)
+            if args.output:
+                write_report_csv(args.output, report)
+            rows = len(report)
+            detail = (
+                f"report date={report_date}; holdings={len(report)}; new stocks={added}; "
+                f"backfilled={backfilled}; output={args.output or 'stdout'}"
+            )
         elif args.command == "sample":
             removed = purge_old_intraday(db, today)
             slot = args.time or current.strftime("%H:%M")
@@ -365,7 +458,10 @@ def main() -> int:
                 detail = f"close refresh; purged old intraday={removed}"
         log_run(db, args.command, rows, detail)
         db.commit()
-    print(json.dumps({"command": args.command, "rows_written": rows, "detail": detail}, ensure_ascii=False))
+    result = {"command": args.command, "rows_written": rows, "detail": detail, "db": str(args.db)}
+    if args.command == "calculate" and not args.output:
+        result["holdings"] = report
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
